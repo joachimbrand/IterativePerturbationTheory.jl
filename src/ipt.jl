@@ -11,7 +11,9 @@ function ipt(
     maxiter=1000,
     diagonal=nothing,
     anderson_memory=5,
-    timed=false
+    timed=false,
+    offset = 0,
+    α = 1,
 )
 
     timed && reset_timer!()
@@ -19,18 +21,27 @@ function ipt(
     @timeit_debug "preparation" begin
         N = size(M, 1)
         T = eltype(M)
+        offset = T(offset)
         @timeit_debug "build d" d = (diagonal == nothing) ? view(M, diagind(M)) : diagonal
         @timeit_debug "build D" D = Diagonal(d)
-        @timeit_debug "build G" G = one(T) ./ (transpose(view(d, 1:k)) .- view(d, :))
+        @timeit_debug "build G" G = one(T) ./ (transpose(view(d, 1:k) .- offset) .- d)
+        @info size(G)
+        @info size(X₀)
+        # apply offset in denominator
     end
 
     function F!(Y, X)
         @timeit_debug "matrix product" mul!(Y, M, X)
+        # Y = M * X
         @timeit_debug "residuals" R  = vec(mapslices(norm, Y .- X * Diagonal(Y); dims=1))
         @timeit_debug "diagonal product 1" mul!(Y, D, X, -one(T), one(T))
+        # Y = Y - D * X ## or Y = (M - D) *  X
         @timeit_debug "diagonal product 2" mul!(Y, X, Diagonal(Y), -one(T), one(T))
+        # Y = Y - X * Diagonal(Y) ## or Y = (M - D - Diagonal((M - D) *  X)) *  X
+        Y .-= offset.*X # apply offset in numerator
         @timeit_debug "hadamard product" Y .*= G
         @timeit_debug "reset diagonal" Y[diagind(Y)] .= one(T)
+        @. Y = α * Y + (1 - α) * X # relaxation
         return R
     end
 
@@ -42,16 +53,16 @@ function ipt(
         timed && print_timer()
 
         return (
-                vectors=sol.solution,
-                values=diag(M * sol.solution),
-                trace=sol.trace,
-                iterations=sol.f_calls,
-                matvecs=sol.matvecs
-            )
+            vectors=sol.solution,
+            values=diag(M * sol.solution),
+            trace=sol.trace,
+            iterations=sol.f_calls,
+            matvecs=sol.matvecs
+        )
 
     elseif acceleration == :anderson
 
-        sol = fixedpoint(F!, X₀; method=:anderson, ftol=tol, store_trace=trace, m=anderson_memory, iterations = maxiter)
+        sol = fixedpoint(F!, X₀; method=:anderson, ftol=tol, store_trace=trace, m=anderson_memory, iterations=maxiter)
 
         timed && print_timer()
 
@@ -68,9 +79,10 @@ function ipt(
         i = 0
 
         matvecs = Vector{Int}(undef, maxiter)
-        if trace
-            residual_history = Vector{Vector{T}}(undef, maxiter)
-        end
+        # if trace
+        #     residual_history = Vector{Vector{T}}(undef, maxiter)
+        # end
+        residual_history = Vector{Vector{T}}(undef, maxiter)
 
         @timeit_debug "iteration" while i < maxiter
 
@@ -78,13 +90,13 @@ function ipt(
 
             @timeit_debug "apply F" R = F!(Y, X)
             @timeit_debug "update current vector" X .= Y
-            matvecs[i] = i == 1 ? k : matvecs[i - 1] + k 
-
-            maximum(R) < tol && break
+            matvecs[i] = i == 1 ? k : matvecs[i-1] + k
 
             if trace
                 residual_history[i] = R
             end
+
+            maximum(R) < tol && break
 
 
         end
@@ -98,10 +110,10 @@ function ipt(
             vectors=X,
             values=diag(M * X),
             matvecs=trace ? matvecs[1:i] : nothing,
+            # trace=trace ? residual_history[1:i] : nothing
             trace=trace ? reduce(hcat, residual_history[1:i])' : nothing
         )
 
 
     end
 end
-
