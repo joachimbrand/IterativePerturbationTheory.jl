@@ -25,8 +25,8 @@ function ipt(
         @timeit_debug "build d" d = (diagonal == nothing) ? view(M, diagind(M)) : diagonal
         @timeit_debug "build D" D = Diagonal(d)
         @timeit_debug "build G" G = one(T) ./ (transpose(view(d, 1:k) .- offset) .- d)
-        @info size(G)
-        @info size(X₀)
+        size(G)
+        size(X₀)
         # apply offset in denominator
     end
 
